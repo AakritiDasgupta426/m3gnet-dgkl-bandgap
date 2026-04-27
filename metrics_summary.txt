@@ -1,0 +1,11 @@
+Train RMSE: 0.1580
+Train MAE:  0.1073
+Train R2:   0.9879
+
+Val RMSE:   0.2620
+Val MAE:    0.1813
+Val R2:     0.9644
+
+Test RMSE:  0.2083
+Test MAE:   0.1369
+Test R2:    0.9806
