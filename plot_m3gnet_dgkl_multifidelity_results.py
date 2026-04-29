@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-data = torch.load("m3gnet_dgkl_results.pt", map_location="cpu")
+data = torch.load("m3gnet_dgkl_multifidelity_results.pt", map_location="cpu")
 print("Available keys:", data.keys())
 
 y_train_true = data["y_train_true"].numpy()
@@ -55,7 +55,7 @@ plt.ylabel("Predicted Band Gap (eV)")
 plt.title("Parity Plot")
 plt.legend()
 plt.tight_layout()
-plt.savefig("parity_plot.png", dpi=300)
+plt.savefig("multifidelity_parity_plot.png", dpi=300)
 plt.close()
 
 # 2. Test residual plot
@@ -67,7 +67,7 @@ plt.xlabel("True Band Gap (eV)")
 plt.ylabel("Residual (Pred - True) (eV)")
 plt.title("Test Residual Plot")
 plt.tight_layout()
-plt.savefig("residual_plot.png", dpi=300)
+plt.savefig("multifidelity_residual_plot.png", dpi=300)
 plt.close()
 
 # 3. Uncertainty vs absolute error
@@ -78,7 +78,7 @@ plt.xlabel("Predictive Std Dev (eV)")
 plt.ylabel("Absolute Error (eV)")
 plt.title("Uncertainty vs Absolute Error")
 plt.tight_layout()
-plt.savefig("uncertainty_vs_error.png", dpi=300)
+plt.savefig("multifidelity_uncertainty_vs_error.png", dpi=300)
 plt.close()
 
 # 4. Test parity colored by uncertainty
@@ -90,7 +90,7 @@ plt.ylabel("Predicted Band Gap (eV)")
 plt.title("Test Parity Plot Colored by Uncertainty")
 plt.colorbar(sc, label="Predictive Std Dev (eV)")
 plt.tight_layout()
-plt.savefig("parity_uncertainty_colored.png", dpi=300)
+plt.savefig("multifidelity_parity_uncertainty_colored.png", dpi=300)
 plt.close()
 
 # 5. Train loss curve
@@ -100,7 +100,7 @@ plt.xlabel("Epoch")
 plt.ylabel("Train Loss")
 plt.title("Training Loss Curve")
 plt.tight_layout()
-plt.savefig("train_loss_curve.png", dpi=300)
+plt.savefig("multifidelity_train_loss_curve.png", dpi=300)
 plt.close()
 
 # 6. Residual histogram
@@ -110,7 +110,7 @@ plt.xlabel("Residual (eV)")
 plt.ylabel("Count")
 plt.title("Test Residual Histogram")
 plt.tight_layout()
-plt.savefig("residual_histogram.png", dpi=300)
+plt.savefig("multifidelity_residual_histogram.png", dpi=300)
 plt.close()
 
 # 7. Uncertainty histogram
@@ -120,7 +120,7 @@ plt.xlabel("Predictive Std Dev (eV)")
 plt.ylabel("Count")
 plt.title("Predictive Uncertainty Distribution")
 plt.tight_layout()
-plt.savefig("uncertainty_histogram.png", dpi=300)
+plt.savefig("multifidelity_uncertainty_histogram.png", dpi=300)
 plt.close()
 
 # 8. Save summary metrics to text file
@@ -138,11 +138,11 @@ with open("metrics_summary.txt", "w") as f:
     f.write(f"Test R2:    {test_r2:.4f}\n")
 
 print("Saved:")
-print(" - parity_plot.png")
-print(" - residual_plot.png")
-print(" - uncertainty_vs_error.png")
-print(" - parity_uncertainty_colored.png")
-print(" - train_loss_curve.png")
-print(" - residual_histogram.png")
-print(" - uncertainty_histogram.png")
-print(" - metrics_summary.txt")
+print(" - multifidelity_parity_plot.png")
+print(" - multifidelity_residual_plot.png")
+print(" - multifidelity_uncertainty_vs_error.png")
+print(" - multifidelity_parity_uncertainty_colored.png")
+print(" - multifidelity_train_loss_curve.png")
+print(" - multifidelity_residual_histogram.png")
+print(" - multifidelity_uncertainty_histogram.png")
+print(" - multifidelity_metrics_summary.txt")
