@@ -1,6 +1,17 @@
+# this the training script for PBE-only DGKL
+# This script trains a DGKL model on the precomputed M3GNet strcutre embeddings fro the band gappredictions.
+# PBE subset of the multifidelity prediciton only
+
+#Overall Strcuture
+#1. Load the m3GNet embeddings and filter out PBE
+#2. SPlit into train/val/test sets
+#3. Normalize the inputs and targets ith training set stats
+#4. train neural feautre extractor and variaiton Gussian Process
+#5. use val. RMSE for checkpointing adn ealery stopping
+#6. save all results for plotting and analysis
+
 import sys
 from collections import Counter
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,16 +21,12 @@ from sklearn.metrics import r2_score
 
 sys.path.append("/depot/amannodi/data/2026_Spring_UG/M3GNet-DGKL/DGKL")
 from cat_uncertainty.dgkl.dgkl import DGKL
-
-# ----------------------------
-# Load data
-# ----------------------------
 data_path = "/depot/amannodi/data/2026_Spring_UG/M3GNet_embeds/Vectors_HaP_mf.pt"
 data = torch.load(data_path, map_location="cpu")
 
 print("Total samples:", len(data))
 print("Fidelity counts:", Counter(data[i]["Fidelity"] for i in data))
-
+#filtered only to PBE
 pbe_ids = [i for i in data if data[i]["Fidelity"] == "PBE"]
 
 X = np.array([data[i]["Vector"] for i in pbe_ids], dtype=np.float32)
@@ -30,9 +37,8 @@ print("PBE X shape:", X.shape)
 print("PBE y shape:", y.shape)
 print("First composition:", compositions[0])
 
-# ----------------------------
-# Split data, preserving composition alignment
-# ----------------------------
+#splitting the data into train/val/test and composition names kept so uncertainty and error
+#can be traced 
 X_train, X_temp, y_train, y_temp, comp_train, comp_temp = train_test_split(
     X, y, compositions, test_size=0.2, random_state=42
 )
@@ -45,9 +51,8 @@ print("Train shape:", X_train.shape, y_train.shape)
 print("Val shape:", X_val.shape, y_val.shape)
 print("Test shape:", X_test.shape, y_test.shape)
 
-# ----------------------------
-# Normalize using TRAIN statistics only
-# ----------------------------
+#normalization - normialize the input embeddings using training stats
+#this is so prevent val/test data leaking into preprocessing
 X_mean = X_train.mean(axis=0, keepdims=True)
 X_std = X_train.std(axis=0, keepdims=True)
 X_std[X_std < 1e-8] = 1.0
@@ -61,12 +66,10 @@ y_std = y_train.std()
 if y_std < 1e-8:
     y_std = 1.0
 
-# Save original targets for metric computation in physical units
 y_train_orig = y_train.copy()
 y_val_orig = y_val.copy()
 y_test_orig = y_test.copy()
 
-# Normalize targets for training
 y_train = (y_train - y_mean) / y_std
 y_val = (y_val - y_mean) / y_std
 y_test = (y_test - y_mean) / y_std
@@ -74,9 +77,7 @@ y_test = (y_test - y_mean) / y_std
 print("X normalization done")
 print("y mean", float(y_mean), "y std", float(y_std))
 
-# ----------------------------
-# Convert to tensors
-# ----------------------------
+#converting the normalized unputs and targets to tensors for the PyTorch
 X_train = torch.tensor(X_train, dtype=torch.float32)
 X_val = torch.tensor(X_val, dtype=torch.float32)
 X_test = torch.tensor(X_test, dtype=torch.float32)
@@ -89,10 +90,12 @@ y_train_orig = torch.tensor(y_train_orig, dtype=torch.float32).view(-1)
 y_val_orig = torch.tensor(y_val_orig, dtype=torch.float32).view(-1)
 y_test_orig = torch.tensor(y_test_orig, dtype=torch.float32).view(-1)
 
-# ----------------------------
-# Model
-# ----------------------------
+#the feature extractor 
 class FeatureExtractor(nn.Module):
+    """
+    the neural feature extractor used before Gaussing process. input dim is 130 bc M3GNet vectors in this fiel 
+    have the length 130. this maps it into a 32-dim latent space
+    """
     def __init__(self, input_dim=130, hidden_dim=64, latent_dim=32):
         super().__init__()
         self.net = nn.Sequential(
@@ -103,7 +106,7 @@ class FeatureExtractor(nn.Module):
 
     def forward(self, x):
         return self.net(x)
-
+#gpu pls; if not cpu
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
@@ -119,6 +122,7 @@ y_train_orig = y_train_orig.to(device)
 y_val_orig = y_val_orig.to(device)
 y_test_orig = y_test_orig.to(device)
 
+#the dgkl model is initilizaed
 feature_extractor = FeatureExtractor(input_dim=130, hidden_dim=64, latent_dim=32).to(device)
 
 with torch.no_grad():
@@ -127,7 +131,7 @@ with torch.no_grad():
 num_inducing = min(128, Z_init.shape[0])
 perm = torch.randperm(Z_init.shape[0], device=Z_init.device)[:num_inducing]
 inducing_points = Z_init[perm].clone()
-
+#this builds the dgkl model with RBF kernel and standard variaitonal strat
 model = DGKL(
     inducing_points=inducing_points,
     feature_extractor=feature_extractor,
@@ -141,17 +145,14 @@ model.gp.likelihood = likelihood
 
 print("Initial latent shape:", Z_init.shape)
 print("Inducing points shape:", inducing_points.shape)
-
+#setup for optimization
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
 mll = gpytorch.mlls.VariationalELBO(
     likelihood,
     model.gp,
     num_data=X_train.size(0),
 )
-
-# ----------------------------
-# Training with checkpointing
-# ----------------------------
+#training with val checkpointing 
 num_epochs = 200
 patience = 5  # measured in validation checks, not raw epochs
 
@@ -204,12 +205,10 @@ for epoch in range(num_epochs):
             f"Val RMSE: {val_rmse:.4f} | "
             f"Val MAE: {val_mae:.4f}"
         )
-
         if val_rmse < best_val_rmse:
             best_val_rmse = val_rmse
             best_epoch = epoch
             epochs_no_improve = 0
-
             torch.save(
                 {
                     "epoch": epoch,
@@ -222,52 +221,46 @@ for epoch in range(num_epochs):
             )
         else:
             epochs_no_improve += 1
-
         if epochs_no_improve >= patience:
             print(f"Early stopping triggered at epoch {epoch}")
             break
-
         model.train()
         likelihood.train()
 
-# ----------------------------
-# Load best checkpoint
-# ----------------------------
+#finds the best checkpoint before the computation of final metrics
 ckpt = torch.load("best_dgkl_checkpoint.pt", map_location=device)
 model.load_state_dict(ckpt["model_state_dict"])
 likelihood.load_state_dict(ckpt["likelihood_state_dict"])
 
 print(f"\nLoaded best checkpoint from epoch {ckpt['epoch']} with val RMSE {ckpt['best_val_rmse']:.4f}")
 
-# ----------------------------
-# Final evaluation on all splits
-# ----------------------------
+#this is the final eval 
 model.eval()
 likelihood.eval()
 
 with torch.no_grad():
-    # Train
+    # train split preds
     train_dist = likelihood(model((X_train,)))
     y_train_pred_norm = train_dist.mean
     y_train_std_norm = train_dist.stddev
     y_train_pred = y_train_pred_norm * y_std + y_mean
     y_train_std = y_train_std_norm * y_std
 
-    # Val
+    # val split preds
     val_dist = likelihood(model((X_val,)))
     y_val_pred_norm = val_dist.mean
     y_val_std_norm = val_dist.stddev
     y_val_pred = y_val_pred_norm * y_std + y_mean
     y_val_std = y_val_std_norm * y_std
 
-    # Test
+    # test split preds
     test_dist = likelihood(model((X_test,)))
     y_test_pred_norm = test_dist.mean
     y_test_std_norm = test_dist.stddev
     y_test_pred = y_test_pred_norm * y_std + y_mean
     y_test_std = y_test_std_norm * y_std
 
-# Metrics in original units
+# the metrics computations for RMSE , MAE and R^2 
 train_rmse = torch.sqrt(torch.mean((y_train_pred - y_train_orig) ** 2)).item()
 train_mae = torch.mean(torch.abs(y_train_pred - y_train_orig)).item()
 train_r2 = r2_score(y_train_orig.detach().cpu().numpy(), y_train_pred.detach().cpu().numpy())
@@ -294,9 +287,7 @@ print(f"Test R2:    {test_r2:.4f}")
 print("\nSample predictive uncertainties:")
 print("First 10 test stddevs:", y_test_std[:10].detach().cpu().numpy())
 
-# ----------------------------
-# High-uncertainty analysis
-# ----------------------------
+#high uncertaininty analysis
 test_abs_error = torch.abs(y_test_pred - y_test_orig).detach().cpu().numpy()
 test_std_np = y_test_std.detach().cpu().numpy()
 test_pred_np = y_test_pred.detach().cpu().numpy()
@@ -312,9 +303,7 @@ for rank, idx in enumerate(top_idx, start=1):
         f"std={test_std_np[idx]:.4f} | abs_err={test_abs_error[idx]:.4f}"
     )
 
-# ----------------------------
-# Save results
-# ----------------------------
+#saving results for analysis
 results = {
     "y_train_true": y_train_orig.detach().cpu(),
     "y_train_pred": y_train_pred.detach().cpu(),
