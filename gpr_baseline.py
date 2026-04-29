@@ -18,6 +18,7 @@ X = np.array([data[i]["Vector"] for i in pbe_ids], dtype=np.float32)
 y = np.array([data[i]["Band_gap"] for i in pbe_ids], dtype=np.float32)
 compositions = np.array([data[i]["Composition"] for i in pbe_ids])
 
+# train and val and test spits 
 X_train, X_temp, y_train, y_temp, comp_train, comp_temp = train_test_split(
     X, y, compositions, test_size=0.2, random_state=42
 )
@@ -30,7 +31,8 @@ print("Train shape:", X_train.shape, y_train.shape)
 print("Val shape:", X_val.shape, y_val.shape)
 print("Test shape:", X_test.shape, y_test.shape)
 
-# Normalize X using train stats
+# Normalize X using train stats only
+#also no leaking in preporocessing 
 X_mean = X_train.mean(axis=0, keepdims=True)
 X_std = X_train.std(axis=0, keepdims=True)
 X_std[X_std < 1e-8] = 1.0
@@ -39,12 +41,13 @@ X_train = (X_train - X_mean) / X_std
 X_val = (X_val - X_mean) / X_std
 X_test = (X_test - X_mean) / X_std
 
-# Save original y
+# original needs to be saved 
 y_train_orig = y_train.copy()
 y_val_orig = y_val.copy()
 y_test_orig = y_test.copy()
 
-# GPR baseline
+# this is the vanilla GPR vased on only raw normbalized embeddings 
+# compared against the DGKL's learned feature trans.
 kernel = C(1.0, (1e-3, 1e3)) * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2))
 
 gpr = GaussianProcessRegressor(
@@ -58,12 +61,12 @@ gpr = GaussianProcessRegressor(
 print("Fitting GPR...")
 gpr.fit(X_train, y_train)
 
-# Predictions
+# Prediction of the mean and std 
 y_train_pred, y_train_std = gpr.predict(X_train, return_std=True)
 y_val_pred, y_val_std = gpr.predict(X_val, return_std=True)
 y_test_pred, y_test_std = gpr.predict(X_test, return_std=True)
 
-# Metrics
+# RMSE, MAE, R^2 computations 
 train_rmse = np.sqrt(np.mean((y_train_pred - y_train_orig) ** 2))
 train_mae = np.mean(np.abs(y_train_pred - y_train_orig))
 train_r2 = r2_score(y_train_orig, y_train_pred)
@@ -90,7 +93,7 @@ print(f"Test R2:    {test_r2:.4f}")
 print("\nSample predictive uncertainties:")
 print("First 10 test stddevs:", y_test_std[:10])
 
-# Top uncertainty points
+# diagnose the uncertainty for antrhing extreme or absurd
 test_abs_error = np.abs(y_test_pred - y_test_orig)
 top_idx = np.argsort(-y_test_std)[:10]
 
@@ -101,7 +104,7 @@ for rank, idx in enumerate(top_idx, start=1):
         f"true={y_test_orig[idx]:.4f} | pred={y_test_pred[idx]:.4f} | "
         f"std={y_test_std[idx]:.4f} | abs_err={test_abs_error[idx]:.4f}"
     )
-
+#save eberyting important so that can be plotted and compared
 results = {
     "y_train_true": y_train_orig,
     "y_train_pred": y_train_pred,
