@@ -44,7 +44,7 @@ all_vals = np.concatenate([
 ])
 mn, mx = all_vals.min(), all_vals.max()
 
-# 1. Parity plot
+# parity plot 
 plt.figure(figsize=(7, 7))
 plt.scatter(y_train_true, y_train_pred, alpha=0.35, label="Train")
 plt.scatter(y_val_true, y_val_pred, alpha=0.7, label="Val")
@@ -58,7 +58,7 @@ plt.tight_layout()
 plt.savefig("multifidelity_parity_plot.png", dpi=300)
 plt.close()
 
-# 2. Test residual plot
+# test residudals plot 
 test_residuals = y_test_pred - y_test_true
 plt.figure(figsize=(7, 5))
 plt.scatter(y_test_true, test_residuals, alpha=0.85)
@@ -70,7 +70,7 @@ plt.tight_layout()
 plt.savefig("multifidelity_residual_plot.png", dpi=300)
 plt.close()
 
-# 3. Uncertainty vs absolute error
+# the uncertaininty compared with avsolute error 
 test_abs_error = np.abs(y_test_pred - y_test_true)
 plt.figure(figsize=(7, 5))
 plt.scatter(y_test_std, test_abs_error, alpha=0.85)
@@ -81,7 +81,7 @@ plt.tight_layout()
 plt.savefig("multifidelity_uncertainty_vs_error.png", dpi=300)
 plt.close()
 
-# 4. Test parity colored by uncertainty
+# the test parity with some jazz 
 plt.figure(figsize=(7, 6))
 sc = plt.scatter(y_test_true, y_test_pred, c=y_test_std, alpha=0.9)
 plt.plot([mn, mx], [mn, mx], "--")
@@ -93,7 +93,7 @@ plt.tight_layout()
 plt.savefig("multifidelity_parity_uncertainty_colored.png", dpi=300)
 plt.close()
 
-# 5. Train loss curve
+# loss curve for trainign 
 plt.figure(figsize=(7, 5))
 plt.plot(range(len(train_losses)), train_losses)
 plt.xlabel("Epoch")
@@ -103,7 +103,7 @@ plt.tight_layout()
 plt.savefig("multifidelity_train_loss_curve.png", dpi=300)
 plt.close()
 
-# 6. Residual histogram
+# historgrams regarding residuals 
 plt.figure(figsize=(7, 5))
 plt.hist(test_residuals, bins=20)
 plt.xlabel("Residual (eV)")
@@ -113,7 +113,7 @@ plt.tight_layout()
 plt.savefig("multifidelity_residual_histogram.png", dpi=300)
 plt.close()
 
-# 7. Uncertainty histogram
+# histogram regarding uncertainiyu 
 plt.figure(figsize=(7, 5))
 plt.hist(y_test_std, bins=20)
 plt.xlabel("Predictive Std Dev (eV)")
@@ -123,7 +123,7 @@ plt.tight_layout()
 plt.savefig("multifidelity_uncertainty_histogram.png", dpi=300)
 plt.close()
 
-# 8. Save summary metrics to text file
+# saving all of this in a summary for easy access 
 with open("metrics_summary.txt", "w") as f:
     f.write(f"Train RMSE: {train_rmse:.4f}\n")
     f.write(f"Train MAE:  {train_mae:.4f}\n")
@@ -137,6 +137,7 @@ with open("metrics_summary.txt", "w") as f:
     f.write(f"Test MAE:   {test_mae:.4f}\n")
     f.write(f"Test R2:    {test_r2:.4f}\n")
 
+#for confirmatin and debufging help
 print("Saved:")
 print(" - multifidelity_parity_plot.png")
 print(" - multifidelity_residual_plot.png")
