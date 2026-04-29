@@ -1,6 +1,13 @@
+#imports 
+# this the DGKL on the precomputed M3GNet structure embeddigns for the band gap prediction.
+#compared to the only with only PBE, this one is looking at PBE and HSE06-PBE+SOC labels
+#it appends 2-dimensional fidelity indication for each impedding
+# the model consists of 
+#1. neutral feature extractor that is mapping the input descriptors to latent space 
+#2. variational Gaussian Process on top of the learned latent features
+#Outputs: train/val/test metrics, precitive mean and uncertainties, high uncertainty test samples and results for plotting
 import sys
 from collections import Counter
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,20 +18,17 @@ from sklearn.metrics import r2_score
 sys.path.append("/depot/amannodi/data/2026_Spring_UG/M3GNet-DGKL/DGKL")
 from cat_uncertainty.dgkl.dgkl import DGKL
 
-# ----------------------------
-# Load data
-# ----------------------------
 data_path = "/depot/amannodi/data/2026_Spring_UG/M3GNet_embeds/Vectors_HaP_mf.pt"
 data = torch.load(data_path, map_location="cpu")
 
 print("Total samples:", len(data))
 print("Fidelity counts:", Counter(data[i]["Fidelity"] for i in data))
-
+#keep only two figelity levels used in the experiment
 valid_ids = [
     i for i in data
     if data[i]["Fidelity"] in ["PBE", "HSE06-PBE+SOC"]
 ]
-
+# extracting the original M3GNet embedding vectors
 base_X = np.array([data[i]["Vector"] for i in valid_ids], dtype=np.float32)
 
 fidelity_vectors = []
@@ -44,9 +48,9 @@ fidelities = np.array([data[i]["Fidelity"] for i in valid_ids])
 print("Multi-fidelity X shape:", X.shape)
 print("y shape:", y.shape)
 print("Fidelity counts:", Counter(fidelities))
-# ----------------------------
-# Split data, preserving composition alignment
-# ----------------------------
+
+#splitting it into train/val/testing sets
+# the compositions are split in parallel for later tracing back to sepfici materials when doing uncertainty
 X_train, X_temp, y_train, y_temp, comp_train, comp_temp = train_test_split(
     X, y, compositions, test_size=0.2, random_state=42
 )
@@ -58,10 +62,8 @@ X_val, X_test, y_val, y_test, comp_val, comp_test = train_test_split(
 print("Train shape:", X_train.shape, y_train.shape)
 print("Val shape:", X_val.shape, y_val.shape)
 print("Test shape:", X_test.shape, y_test.shape)
-
-# ----------------------------
-# Normalize using TRAIN statistics only
-# ----------------------------
+# data is getting normalized so using only training set stats
+#avoiding the data leakage that could occur from val/test sets
 X_mean = X_train.mean(axis=0, keepdims=True)
 X_std = X_train.std(axis=0, keepdims=True)
 X_std[X_std < 1e-8] = 1.0
@@ -75,22 +77,17 @@ y_std = y_train.std()
 if y_std < 1e-8:
     y_std = 1.0
 
-# Save original targets for metric computation in physical units
 y_train_orig = y_train.copy()
 y_val_orig = y_val.copy()
 y_test_orig = y_test.copy()
 
-# Normalize targets for training
 y_train = (y_train - y_mean) / y_std
 y_val = (y_val - y_mean) / y_std
 y_test = (y_test - y_mean) / y_std
 
 print("X normalization done")
 print("y mean", float(y_mean), "y std", float(y_std))
-
-# ----------------------------
-# Convert to tensors
-# ----------------------------
+#converting the arrays to PyTorch tensors 
 X_train = torch.tensor(X_train, dtype=torch.float32)
 X_val = torch.tensor(X_val, dtype=torch.float32)
 X_test = torch.tensor(X_test, dtype=torch.float32)
@@ -103,10 +100,12 @@ y_train_orig = torch.tensor(y_train_orig, dtype=torch.float32).view(-1)
 y_val_orig = torch.tensor(y_val_orig, dtype=torch.float32).view(-1)
 y_test_orig = torch.tensor(y_test_orig, dtype=torch.float32).view(-1)
 
-# ----------------------------
-# Model
-# ----------------------------
+#this is the feature extractor 
 class FeatureExtractor(nn.Module):
+    """
+    Small neaural metwork that is used to learn a lower dim representation before the Gaussian process. The 
+    input dim is 132: 130 M3GNet and 2 Fidelity indicator 
+    """
     def __init__(self, input_dim=132, hidden_dim=64, latent_dim=32):
         super().__init__()
         self.net = nn.Sequential(
@@ -118,6 +117,7 @@ class FeatureExtractor(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+# GPU pls; if not CPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
@@ -132,7 +132,7 @@ y_test = y_test.to(device)
 y_train_orig = y_train_orig.to(device)
 y_val_orig = y_val_orig.to(device)
 y_test_orig = y_test_orig.to(device)
-
+#initialized the DGKL model
 feature_extractor = FeatureExtractor(input_dim=132, hidden_dim=64, latent_dim=32).to(device)
 
 with torch.no_grad():
@@ -141,7 +141,7 @@ with torch.no_grad():
 num_inducing = min(128, Z_init.shape[0])
 perm = torch.randperm(Z_init.shape[0], device=Z_init.device)[:num_inducing]
 inducing_points = Z_init[perm].clone()
-
+#build dgkl model using the RBF kernel and standard variation start
 model = DGKL(
     inducing_points=inducing_points,
     feature_extractor=feature_extractor,
@@ -155,19 +155,19 @@ model.gp.likelihood = likelihood
 
 print("Initial latent shape:", Z_init.shape)
 print("Inducing points shape:", inducing_points.shape)
-
+#optimization setup
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+#variational ELBO
 mll = gpytorch.mlls.VariationalELBO(
     likelihood,
     model.gp,
     num_data=X_train.size(0),
 )
-
-# ----------------------------
-# Training with checkpointing
-# ----------------------------
+# training that now includes validation checkpointing 
 num_epochs = 200
-patience = 5  # measured in validation checks, not raw epochs
+# measured in validation checks, not raw epochs
+#50 epochs wihtout vaidation improv, before stopping
+patience = 5  
 
 best_val_rmse = float("inf")
 best_epoch = -1
@@ -244,44 +244,38 @@ for epoch in range(num_epochs):
         model.train()
         likelihood.train()
 
-# ----------------------------
-# Load best checkpoint
-# ----------------------------
+#this looks at best checkpoint
 ckpt = torch.load("best_dgkl_checkpoint.pt", map_location=device)
 model.load_state_dict(ckpt["model_state_dict"])
 likelihood.load_state_dict(ckpt["likelihood_state_dict"])
 
 print(f"\nLoaded best checkpoint from epoch {ckpt['epoch']} with val RMSE {ckpt['best_val_rmse']:.4f}")
 
-# ----------------------------
-# Final evaluation on all splits
-# ----------------------------
+#evaluation 
 model.eval()
 likelihood.eval()
 
 with torch.no_grad():
-    # Train
+    # train split preds
     train_dist = likelihood(model((X_train,)))
     y_train_pred_norm = train_dist.mean
     y_train_std_norm = train_dist.stddev
     y_train_pred = y_train_pred_norm * y_std + y_mean
     y_train_std = y_train_std_norm * y_std
-
-    # Val
+    # val split preds
     val_dist = likelihood(model((X_val,)))
     y_val_pred_norm = val_dist.mean
     y_val_std_norm = val_dist.stddev
     y_val_pred = y_val_pred_norm * y_std + y_mean
     y_val_std = y_val_std_norm * y_std
-
-    # Test
+    # test val preds 
     test_dist = likelihood(model((X_test,)))
     y_test_pred_norm = test_dist.mean
     y_test_std_norm = test_dist.stddev
     y_test_pred = y_test_pred_norm * y_std + y_mean
     y_test_std = y_test_std_norm * y_std
 
-# Metrics in original units
+#metrics
 train_rmse = torch.sqrt(torch.mean((y_train_pred - y_train_orig) ** 2)).item()
 train_mae = torch.mean(torch.abs(y_train_pred - y_train_orig)).item()
 train_r2 = r2_score(y_train_orig.detach().cpu().numpy(), y_train_pred.detach().cpu().numpy())
@@ -308,9 +302,7 @@ print(f"Test R2:    {test_r2:.4f}")
 print("\nSample predictive uncertainties:")
 print("First 10 test stddevs:", y_test_std[:10].detach().cpu().numpy())
 
-# ----------------------------
-# High-uncertainty analysis
-# ----------------------------
+#analusis for the high-uncertainty
 test_abs_error = torch.abs(y_test_pred - y_test_orig).detach().cpu().numpy()
 test_std_np = y_test_std.detach().cpu().numpy()
 test_pred_np = y_test_pred.detach().cpu().numpy()
@@ -326,9 +318,7 @@ for rank, idx in enumerate(top_idx, start=1):
         f"std={test_std_np[idx]:.4f} | abs_err={test_abs_error[idx]:.4f}"
     )
 
-# ----------------------------
-# Save results
-# ----------------------------
+#resutls need to be saved for plotting and analusis
 results = {
     "y_train_true": y_train_orig.detach().cpu(),
     "y_train_pred": y_train_pred.detach().cpu(),
